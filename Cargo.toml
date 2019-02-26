@@ -1,0 +1,10 @@
+[package]
+name = "magnus"
+version = "0.1.0"
+authors = ["LooMaclin <loo.maclin@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+scrap = "0.5.0"
+engiffen = "0.8.1"
+azul = { git = "https://github.com/maps4print/azul.git" }
