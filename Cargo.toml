@@ -7,4 +7,7 @@ edition = "2018"
 [dependencies]
 scrap = "0.5.0"
 engiffen = "0.8.1"
-azul = { git = "https://github.com/maps4print/azul.git" }
+cairo-rs = "0.6.0"
+gdk = "0.10.0"
+gio = "0.6.0"
+gtk = "0.6.0"
