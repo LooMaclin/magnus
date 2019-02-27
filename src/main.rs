@@ -12,14 +12,19 @@ use gtk::prelude::*;
 use gtk::Align;
 use gtk::Orientation;
 use gtk::{ApplicationWindow, Button, Fixed};
+use notify_rust::Notification;
 use scrap::{Capturer, Display};
 use std::env::args;
 use std::fs::File;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+
+pub static recording_stop: AtomicBool = AtomicBool::new(false);
 
 fn flip_flop(
     buffer: &[u8],
@@ -74,8 +79,6 @@ struct Data {
 }
 
 fn start_recording(x: usize, y: usize, w: usize, h: usize, data: &Data) {
-    println!("start recording");
-
     let display = Display::primary().expect("Couldn't find primary display.");
     let mut capturer = Capturer::new(display).expect("Couldn't begin capture.");
     let (screen_w, screen_h) = (capturer.width(), capturer.height());
@@ -92,15 +95,14 @@ fn start_recording(x: usize, y: usize, w: usize, h: usize, data: &Data) {
             h,
         ));
         std::thread::sleep(Duration::from_millis(16));
-        if images.len() == 640 {
+        if recording_stop.load(Ordering::Relaxed) {
             break;
         }
     }
-    println!("elapsed: {}", instant.elapsed().as_float_secs());
     let gif = engiffen(&images, data.fps, data.quantizer).unwrap();
     let mut output = File::create(&data.path).unwrap();
     gif.write(&mut output).unwrap();
-    println!("saved to {}", data.path);
+    recording_stop.compare_and_swap(true, false, Ordering::Relaxed);
 }
 
 fn set_visual(window: &gtk::Window, _screen: &Option<gdk::Screen>) {
@@ -142,7 +144,7 @@ fn main() {
         return;
     }
     let glade_src = include_str!("../ui.glade");
-    let builder = gtk::Builder::new_from_string(glade_src);
+    let builder = Arc::new(gtk::Builder::new_from_string(glade_src));
     let window: Arc<gtk::Window> = Arc::new(builder.get_object("main_window").unwrap());
     window.set_keep_above(true);
     window.connect_draw(draw);
@@ -150,10 +152,11 @@ fn main() {
     set_visual(&window, &None);
     window.set_app_paintable(true);
     let button: gtk::Button = builder.get_object("record_button").unwrap();
+    let builder_clone = builder.clone();
     window.connect_draw(move |a, b| {
-        let window_region = get_widget_region::<gtk::Window>("main_window", &builder);
-        let view_region = get_widget_region::<gtk::Box>("main_box", &builder);
-        let header_region = get_widget_region::<gtk::HeaderBar>("main_header", &builder);
+        let window_region = get_widget_region::<gtk::Window>("main_window", &builder_clone);
+        let view_region = get_widget_region::<gtk::Box>("main_box", &builder_clone);
+        let header_region = get_widget_region::<gtk::HeaderBar>("main_header", &builder_clone);
 
         window_region.subtract(&view_region);
         window_region.union(&header_region);
@@ -162,20 +165,36 @@ fn main() {
     });
     let window_in_button = window.clone();
     button.connect_clicked(move |a| {
-        //        let window: Window = a.get_window().unwrap();
-        let (x, y) = window_in_button.get_position();
-        let (w, h) = window_in_button.get_size();
-        start_recording(
-            x as usize,
-            y as usize,
-            w as usize,
-            h as usize,
-            &Data {
-                path: "output.gif".to_string(),
-                fps: 64,
-                quantizer: Quantizer::Naive,
-            },
-        );
+        if a.get_label().unwrap() == "Stop" {
+            recording_stop.compare_and_swap(false, true, Ordering::Relaxed);
+            a.set_label("Record");
+        } else {
+            a.set_label("Stop");
+            let (x, y) = window_in_button.get_position();
+            let (w, h) = window_in_button.get_size();
+            let header_region = get_widget_region::<gtk::HeaderBar>("main_header", &builder);
+            let header_rectangle = header_region.get_rectangle(0);
+            std::thread::spawn(move || {
+                let data = Data {
+                    path: "output.gif".to_string(),
+                    fps: 10,
+                    quantizer: Quantizer::Naive,
+                };
+                println!("rect: {:?}", header_rectangle);
+                start_recording(
+                    x as usize,
+                    y as usize + header_rectangle.height as usize + 25, //TODO: remove hardcoded coordinates
+                    w as usize,
+                    h as usize - header_rectangle.height as usize,
+                    &data,
+                );
+                Notification::new()
+                    .summary("Magnus Gif saved")
+                    .icon("dialog-information")
+                    .show()
+                    .unwrap();
+            });
+        }
     });
 
     window.show_all();
