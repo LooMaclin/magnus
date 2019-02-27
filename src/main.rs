@@ -1,30 +1,18 @@
-#![feature(duration_float)]
-
-use cairo::RectangleInt;
-use cairo::Region;
-use engiffen::engiffen;
-use engiffen::Image;
-use engiffen::Quantizer;
-use gdk::Window;
-use gdk::WindowExt;
-use gio::prelude::*;
+use cairo::{RectangleInt, Region};
+use engiffen::{engiffen, Image, Quantizer};
 use gtk::prelude::*;
-use gtk::Align;
-use gtk::Orientation;
-use gtk::{ApplicationWindow, Button, Fixed};
 use notify_rust::Notification;
 use scrap::{Capturer, Display};
-use std::env::args;
-use std::fs::File;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
+use std::{
+    fs::File,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
-pub static recording_stop: AtomicBool = AtomicBool::new(false);
+pub static RECORDING: AtomicBool = AtomicBool::new(false);
 
 fn flip_flop(
     buffer: &[u8],
@@ -61,7 +49,7 @@ fn capture_screen(
         Ok(buffer) => buffer,
         Err(error) => {
             panic!("Error: {:#?}", error);
-        }
+        },
     };
     let image = flip_flop(&buffer, screen_w, screen_h, x, y, image_w, image_h);
     let image = Image {
@@ -83,7 +71,6 @@ fn start_recording(x: usize, y: usize, w: usize, h: usize, data: &Data) {
     let mut capturer = Capturer::new(display).expect("Couldn't begin capture.");
     let (screen_w, screen_h) = (capturer.width(), capturer.height());
     let mut images = Vec::new();
-    let instant = Instant::now();
     loop {
         images.push(capture_screen(
             &mut capturer,
@@ -95,14 +82,14 @@ fn start_recording(x: usize, y: usize, w: usize, h: usize, data: &Data) {
             h,
         ));
         std::thread::sleep(Duration::from_millis(16));
-        if recording_stop.load(Ordering::Relaxed) {
+        if RECORDING.load(Ordering::Relaxed) {
             break;
         }
     }
     let gif = engiffen(&images, data.fps, data.quantizer).unwrap();
     let mut output = File::create(&data.path).unwrap();
     gif.write(&mut output).unwrap();
-    recording_stop.compare_and_swap(true, false, Ordering::Relaxed);
+    RECORDING.compare_and_swap(true, false, Ordering::Relaxed);
 }
 
 fn set_visual(window: &gtk::Window, _screen: &Option<gdk::Screen>) {
@@ -153,26 +140,29 @@ fn main() {
     window.set_app_paintable(true);
     let button: gtk::Button = builder.get_object("record_button").unwrap();
     let builder_clone = builder.clone();
-    window.connect_draw(move |a, b| {
-        let window_region = get_widget_region::<gtk::Window>("main_window", &builder_clone);
+    window.connect_draw(move |window, _| {
+        let window_region =
+            get_widget_region::<gtk::Window>("main_window", &builder_clone);
         let view_region = get_widget_region::<gtk::Box>("main_box", &builder_clone);
-        let header_region = get_widget_region::<gtk::HeaderBar>("main_header", &builder_clone);
+        let header_region =
+            get_widget_region::<gtk::HeaderBar>("main_header", &builder_clone);
 
         window_region.subtract(&view_region);
         window_region.union(&header_region);
-        a.input_shape_combine_region(&window_region);
+        window.input_shape_combine_region(&window_region);
         Inhibit(false)
     });
     let window_in_button = window.clone();
     button.connect_clicked(move |a| {
         if a.get_label().unwrap() == "Stop" {
-            recording_stop.compare_and_swap(false, true, Ordering::Relaxed);
+            RECORDING.compare_and_swap(false, true, Ordering::Relaxed);
             a.set_label("Record");
         } else {
             a.set_label("Stop");
             let (x, y) = window_in_button.get_position();
             let (w, h) = window_in_button.get_size();
-            let header_region = get_widget_region::<gtk::HeaderBar>("main_header", &builder);
+            let header_region =
+                get_widget_region::<gtk::HeaderBar>("main_header", &builder);
             let header_rectangle = header_region.get_rectangle(0);
             std::thread::spawn(move || {
                 let data = Data {
@@ -180,7 +170,6 @@ fn main() {
                     fps: 10,
                     quantizer: Quantizer::Naive,
                 };
-                println!("rect: {:?}", header_rectangle);
                 start_recording(
                     x as usize,
                     y as usize + header_rectangle.height as usize + 25, //TODO: remove hardcoded coordinates
